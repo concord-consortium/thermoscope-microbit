@@ -1,0 +1,11 @@
+{
+  "name": "thermoscope-microbit",
+  "version": "1.0.0-pre.1",
+  "description": "A micro:bit implementation of the thermoscope hardware.",
+  "license": "MIT",
+  "dependencies": {
+    "microbit": "lancaster-university/microbit"
+  },
+  "targetDependencies": {},
+  "bin": "./source"
+}
