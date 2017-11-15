@@ -93,6 +93,10 @@ void onButtonA(MicroBitEvent e)
     // Try to configure button A to wake from power off.
     nrf_gpio_cfg_sense_input(MICROBIT_PIN_BUTTON_A, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
 
+    // need to clear the pull up resistor on the pins so we don't loose current there
+    P0.getDigitalValue();
+    P0.setPull(PullNone);
+
     sd_power_system_off();
   }
 }
@@ -134,7 +138,12 @@ void readTemperature(){
   // Solving the voltage divider equation: Vout = Vin * R2 / (R1 + R2)
   // For R2 yields: R2 = R1 / ((Vin / Vout) - 1)
 
-  float seriesResistance = 10000;
+
+  // if we are using the resitor from adafruit
+  // float seriesResistance = 10000;
+
+  // If we are using the pull up resistor
+  float seriesResistance = 13000;
   float thermistorNominalResistance = 10000;
   float thermistorBeta = 3950;
 
@@ -155,6 +164,8 @@ void readTemperature(){
   // convert to an int by multipling by 10 this gives us 1 decimal place of resolution
   display.scroll((int)(steinhart * 10));
 
+  // reset the display after scrolling, so we can tell it is still on
+  display.print("r");
   // gatt.setChar(sensorService->measureCharId, (int32_t)(steinhart * 100));
 
 }
@@ -164,7 +175,12 @@ void onButtonB(MicroBitEvent e)
   readTemperature();
 }
 
-
+void my_panic(){
+  display.print("e");
+  while(true){
+      wait_ms(10);
+  }
+}
 
 int main(void)
 {
@@ -179,27 +195,32 @@ int main(void)
     // Bring up fiber scheduler.
     scheduler_init(messageBus);
 
+
+    // Note: The pull up resitor can vary in resistance a lot from the spec
+    //  Symbol  |   Parameter              |   Min.  |    Typ.  |    Max.  |   Units
+    //  RPU     |   Pull-up resistance     |   11    |    13    |    16    |   kOhm
+    //  RPD     |   Pull-down resistance   |   11    |    13    |    16    |   kOhm
+
+    // enable the pull up on on pin0
+    // Need to switch into digital mode before setting the pull up
+    // geting a digital value seems like the only way to do this
+    P0.getDigitalValue();
+    if(P0.setPull(PullUp) != MICROBIT_OK){
+      my_panic();
+    };
+
     // uBit.display.print("m");
 
     if(messageBus.listen(MICROBIT_ID_BUTTON_A, MICROBIT_BUTTON_EVT_DOWN, onButtonA) != MICROBIT_OK){
-      display.print("e");
-      while(true){
-          wait_ms(10);
-      }
+      my_panic();
     }
 
     if(messageBus.listen(MICROBIT_ID_BUTTON_A, MICROBIT_BUTTON_EVT_UP, onButtonA) != MICROBIT_OK){
-      display.print("e");
-      while(true){
-          wait_ms(10);
-      }
+      my_panic();
     }
 
     if(messageBus.listen(MICROBIT_ID_BUTTON_B, MICROBIT_BUTTON_EVT_DOWN, onButtonB) != MICROBIT_OK){
-      display.print("e");
-      while(true){
-          wait_ms(10);
-      }
+      my_panic();
     }
 
     display.print("r");
