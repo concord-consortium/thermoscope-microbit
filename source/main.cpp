@@ -97,12 +97,74 @@ void onButtonA(MicroBitEvent e)
   }
 }
 
+// how many samples to take and average, more takes longer
+// but is more 'smooth'
+// bluefruit thermoscope used 80 here
+#define NUMSAMPLES 10
+int samples[NUMSAMPLES];
+
+// temp. for nominal resistance (almost always 25 C)
+#define TEMPERATURENOMINAL 25
+
+void readTemperature(){
+  uint8_t i;
+  float averageDigitialCounts;
+
+  // take N samples in a row
+  for (i=0; i< NUMSAMPLES; i++) {
+   samples[i] = P0.getAnalogValue();
+  }
+
+  // average all the samples out
+  averageDigitialCounts = 0;
+  for (i=0; i< NUMSAMPLES; i++) {
+     averageDigitialCounts += samples[i];
+  }
+  averageDigitialCounts /= NUMSAMPLES;
+
+  // We don't need it for the resistance equation but it will help for calibration
+  // to report the microVolts
+  // int32_t microVolts = (int32_t)((averageDigitialCounts / 1024) * 3000000);
+  // gatt.setChar(sensorService->microVoltsCharId, microVolts);
+
+  // Serial.print("Average analog reading ");
+  // Serial.println(average);
+
+  // convert the value to resistance
+  // Solving the voltage divider equation: Vout = Vin * R2 / (R1 + R2)
+  // For R2 yields: R2 = R1 / ((Vin / Vout) - 1)
+
+  float seriesResistance = 10000;
+  float thermistorNominalResistance = 10000;
+  float thermistorBeta = 3950;
+
+  float resistanceRatio = (1024 / averageDigitialCounts) - 1;
+  float resistance = seriesResistance  / resistanceRatio;
+
+  // Serial.print("Thermistor resistance ");
+  // Serial.println(average);
+
+  float steinhart;
+  steinhart = resistance / thermistorNominalResistance;     // (R/Ro)
+  steinhart = log(steinhart);                                          // ln(R/Ro)
+  steinhart /= thermistorBeta;                           // 1/B * ln(R/Ro)
+  steinhart += 1.0 / (TEMPERATURENOMINAL + 273.15);                    // + (1/To)
+  steinhart = 1.0 / steinhart;                                         // Invert
+  steinhart -= 273.15;                         // convert to C
+
+  // convert to an int by multipling by 10 this gives us 1 decimal place of resolution
+  display.scroll((int)(steinhart * 10));
+
+  // gatt.setChar(sensorService->measureCharId, (int32_t)(steinhart * 100));
+
+}
+
 void onButtonB(MicroBitEvent e)
 {
-  int p0value = P0.getAnalogValue(); // a value in the range of 0 - 1024
-  // display.print(itoa(p0value%1000));
-  display.print(p0value/100);
+  readTemperature();
 }
+
+
 
 int main(void)
 {
@@ -140,7 +202,7 @@ int main(void)
       }
     }
 
-    display.print("w");
+    display.print("r");
 
     // this line causes a gain of 0.8mA looking at the code this seems like it must be
     // caused by making the pins be input pins and/or setting them to PullNone
