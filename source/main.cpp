@@ -32,6 +32,33 @@
 
 BLE ble;
 
+// Temporary static name
+const static char     DEVICE_NAME[]        = "Thermoscope M";
+
+// Static configuration of services
+// TODO figure out how to split this out into a header like the other services
+const uint8_t  TempAServiceUUID[] = {
+  0xf0, 0x00, 0xaa, 0x00, 0x04, 0x51, 0x40, 0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+int32_t initialTemp = 1000;
+
+ReadOnlyGattCharacteristic<int32_t>
+  tempAChar((uint16_t)0x0001, &initialTemp, GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_NOTIFY);
+
+GattCharacteristic *tempAChars[] = {&tempAChar, };
+GattService         tempAService(TempAServiceUUID, tempAChars, sizeof(tempAChars) / sizeof(GattCharacteristic *));
+
+const uint8_t  TempBServiceUUID[] = {
+  0xf0, 0x00, 0xbb, 0x00, 0x04, 0x51, 0x40, 0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+ReadOnlyGattCharacteristic<int32_t>
+  tempBChar((uint16_t)0x0001, &initialTemp, GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_NOTIFY);
+
+GattCharacteristic *tempBChars[] = {&tempBChar, };
+GattService         tempBService(TempBServiceUUID, tempBChars, sizeof(tempBChars) / sizeof(GattCharacteristic *));
+
 // MicroBit uBit;
 
 MicroBitButton buttonA(MICROBIT_PIN_BUTTON_A, MICROBIT_ID_BUTTON_A);
@@ -40,32 +67,65 @@ MicroBitDisplay display;
 MicroBitMessageBus messageBus;
 MicroBitPin P0(MICROBIT_ID_IO_P0, MICROBIT_PIN_P0, PIN_CAPABILITY_ALL);
 
+/* Restart Advertising on disconnection*/
+void disconnectionCallback(const Gap::DisconnectionCallbackParams_t *)
+{
+    BLE::Instance().gap().startAdvertising();
+}
+
 void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
 {
-    // BLE &ble          = params->ble;
+    // I wonder why this is commented out
+    BLE &ble          = params->ble;
     ble_error_t error = params->error;
 
     if (error != BLE_ERROR_NONE) {
         return;
     }
 
-    /**
-     * The Beacon payload has the following composition:
-     * 128-Bit / 16byte UUID = E2 0A 39 F4 73 F5 4B C4 A1 2F 17 D1 AD 07 A9 61
-     * Major/Minor  = 0x1122 / 0x3344
-     * Tx Power     = 0xC8 = 200, 2's compliment is 256-200 = (-56dB)
-     *
-     * Note: please remember to calibrate your beacons TX Power for more accurate results.
-     */
-    // const uint8_t uuid[] = {0xE2, 0x0A, 0x39, 0xF4, 0x73, 0xF5, 0x4B, 0xC4,
-    //                         0xA1, 0x2F, 0x17, 0xD1, 0xAD, 0x07, 0xA9, 0x61};
-    // uint16_t majorNumber = 1122;
-    // uint16_t minorNumber = 3344;
-    // uint16_t txPower     = 0xC8;
-    // iBeacon *ibeacon = new iBeacon(ble, uuid, majorNumber, minorNumber, txPower);
+    // I'm not sure what this check is for. Is is used in the ble examples from
+    // nordic
+    if (ble.getInstanceID() != BLE::DEFAULT_INSTANCE) {
+        return;
+    }
 
-    // ble.gap().setAdvertisingInterval(1000); /* 1000ms. */
-    // ble.gap().startAdvertising();
+    // register a callback so we start advertising again on disconnect
+    ble.gap().onDisconnection(disconnectionCallback);
+
+    /**
+     * In our advertising payload we just want to include the name since that is all
+     * the softwrew knows about. If it fits it would make sense to include a UUID
+     * too for future usage. Using a UUID will speed up the identification by the
+     * browser
+     */
+
+     /* setup advertising this comes from the health thermometer example */
+     // add the flags
+     ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::BREDR_NOT_SUPPORTED | GapAdvertisingData::LE_GENERAL_DISCOVERABLE);
+     // TODO add a UUID this is the standard way to filter devices. This would be safer
+     // than filtering by just the Thermoscope name prefix
+     // but we don't have a lot of space, this would take up
+     // up 16 bytes just for the id, and our name is 'Thermoscope [4byte char]' or 16 chars
+     // so that is 32 bytes just for the data, and each of those need 2 more bytes of type and size
+     // so that is too many bytes to include both. Either we need to decrease the name, or
+     // keep the name in the scan response.
+     // ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::COMPLETE_LIST_16BIT_SERVICE_IDS, (uint8_t *)uuid16_list, sizeof(uuid16_list));
+     // I don't know what kind of additional packet this is, perhaps a known id for this type of device
+     //  ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::THERMOMETER_EAR);
+     ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::COMPLETE_LOCAL_NAME, (uint8_t *)DEVICE_NAME, sizeof(DEVICE_NAME));
+     // If I understand things correctly, this means that any other device can connect to
+     // to us. This is also the place where it would be changed if we wanted to support
+     // a scan response.
+     ble.gap().setAdvertisingType(GapAdvertisingParams::ADV_CONNECTABLE_UNDIRECTED);
+     // TODO: check the apple guidelines, I believe they recommend a different advertising
+     // interval configuration
+     ble.gap().setAdvertisingInterval(500); /* 500ms */
+
+     // Add the 2 temperature sensor services
+     ble.addService(tempAService);
+     ble.addService(tempBService);
+
+     ble.gap().startAdvertising();
 }
 
 void my_wait(uint32_t millis)
@@ -161,11 +221,17 @@ void readTemperature(){
   steinhart = 1.0 / steinhart;                                         // Invert
   steinhart -= 273.15;                         // convert to C
 
+  int32_t temperature_100 = (int32_t)(steinhart * 100);
+
+  if (ble.getGapState().connected) {
+      ble.gattServer().write(tempAChar.getValueHandle(), (uint8_t *) &temperature_100, sizeof(temperature_100));
+  }
+
   // convert to an int by multipling by 10 this gives us 1 decimal place of resolution
-  display.scroll((int)(steinhart * 10));
+  // display.scroll((int)(steinhart * 10));
 
   // reset the display after scrolling, so we can tell it is still on
-  display.print("r");
+  // display.print("r");
   // gatt.setChar(sensorService->measureCharId, (int32_t)(steinhart * 100));
 
 }
