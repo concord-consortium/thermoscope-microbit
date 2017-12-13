@@ -27,6 +27,7 @@
 #include "MicroBitMessageBus.h"
 #include "MicroBitButton.h"
 #include "MicroBitPin.h"
+#include "MicroBitStorage.h"
 
 // #include "MicroBit.h"
 
@@ -35,18 +36,34 @@ BLE ble;
 // Temporary static name
 const static char     DEVICE_NAME[]        = "Thermoscope M";
 
+int32_t initialTemp = 1000;
+int32_t initialCounts = 0;
+
+bool startingToSleep = false;
+
 // Static configuration of services
 // TODO figure out how to split this out into a header like the other services
+int16_t adcCalibrationHalfCounts = 512;
+int16_t adcCalibrationThreeQuartersCounts = 767;
+
+ReadWriteGattCharacteristic<int16_t>
+  adcCalibrationHalfCountsChar((uint16_t)0x0101, &adcCalibrationHalfCounts);
+ReadWriteGattCharacteristic<int16_t>
+  adcCalibrationThreeQuartersCountsChar((uint16_t)0x0102, &adcCalibrationThreeQuartersCounts);
+GattCharacteristic *deviceChars[] = {&adcCalibrationHalfCountsChar, &adcCalibrationThreeQuartersCountsChar, };
+GattService         deviceInfoService((uint16_t)0x1234, deviceChars, sizeof(deviceChars) / sizeof(GattCharacteristic *));
+
 const uint8_t  TempAServiceUUID[] = {
   0xf0, 0x00, 0xaa, 0x00, 0x04, 0x51, 0x40, 0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-int32_t initialTemp = 1000;
-
 ReadOnlyGattCharacteristic<int32_t>
   tempAChar((uint16_t)0x0001, &initialTemp, GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_NOTIFY);
+ReadOnlyGattCharacteristic<int32_t>
+  countsAChar((uint16_t)0x0002, &initialCounts, GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_NOTIFY);
 
-GattCharacteristic *tempAChars[] = {&tempAChar, };
+
+GattCharacteristic *tempAChars[] = {&tempAChar, &countsAChar, };
 GattService         tempAService(TempAServiceUUID, tempAChars, sizeof(tempAChars) / sizeof(GattCharacteristic *));
 
 const uint8_t  TempBServiceUUID[] = {
@@ -55,8 +72,10 @@ const uint8_t  TempBServiceUUID[] = {
 
 ReadOnlyGattCharacteristic<int32_t>
   tempBChar((uint16_t)0x0001, &initialTemp, GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_NOTIFY);
+ReadOnlyGattCharacteristic<int32_t>
+  countsBChar((uint16_t)0x0002, &initialCounts, GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_NOTIFY);
 
-GattCharacteristic *tempBChars[] = {&tempBChar, };
+GattCharacteristic *tempBChars[] = {&tempBChar, &countsBChar, };
 GattService         tempBService(TempBServiceUUID, tempBChars, sizeof(tempBChars) / sizeof(GattCharacteristic *));
 
 // MicroBit uBit;
@@ -64,13 +83,85 @@ GattService         tempBService(TempBServiceUUID, tempBChars, sizeof(tempBChars
 MicroBitButton buttonA(MICROBIT_PIN_BUTTON_A, MICROBIT_ID_BUTTON_A);
 MicroBitButton buttonB(MICROBIT_PIN_BUTTON_B, MICROBIT_ID_BUTTON_B);
 MicroBitDisplay display;
+MicroBitStorage storage;
 MicroBitMessageBus messageBus;
 MicroBitPin P0(MICROBIT_ID_IO_P0, MICROBIT_PIN_P0, PIN_CAPABILITY_ALL);
+MicroBitPin P1(MICROBIT_ID_IO_P1, MICROBIT_PIN_P1, PIN_CAPABILITY_ALL);
+MicroBitPin P2(MICROBIT_ID_IO_P2, MICROBIT_PIN_P2, PIN_CAPABILITY_ALL);
+
+void my_panic(){
+  display.print("e");
+  while(true){
+      fiber_sleep(10);
+  }
+}
 
 /* Restart Advertising on disconnection*/
 void disconnectionCallback(const Gap::DisconnectionCallbackParams_t *)
 {
+    display.print("A");
     BLE::Instance().gap().startAdvertising();
+}
+
+void connectionCallback(const Gap::ConnectionCallbackParams_t *)
+{
+    display.print("C");
+}
+
+void updateStorage()
+{
+  // return control so we are run later (I hope)
+  fiber_sleep(100);
+  if(storage.put("adcCal50", (uint8_t *)&adcCalibrationHalfCounts,
+     sizeof(adcCalibrationHalfCounts)) != MICROBIT_OK){
+    my_panic();
+  }
+  if(storage.put("adcCal75", (uint8_t *)&adcCalibrationThreeQuartersCounts,
+     sizeof(adcCalibrationThreeQuartersCounts)) != MICROBIT_OK){
+    my_panic();
+  }
+  display.print("U");
+}
+
+void onDataWritten(const GattWriteCallbackParams* writeParams)
+{
+  uint16_t handle = writeParams->handle;
+
+  if (handle == adcCalibrationHalfCountsChar.getValueHandle()) {
+    memcpy(&adcCalibrationHalfCounts, writeParams->data, sizeof(adcCalibrationHalfCounts));
+    display.print("H");
+    create_fiber(updateStorage);
+  } else if(handle == adcCalibrationThreeQuartersCountsChar.getValueHandle()) {
+    memcpy(&adcCalibrationThreeQuartersCounts, writeParams->data, sizeof(adcCalibrationThreeQuartersCounts));
+    display.print("T");
+    create_fiber(updateStorage);
+  }
+}
+
+// read the values fron storage and also set them on the gatt characteristics
+void loadStoredValue(const char *name, int16_t& value, GattCharacteristic& gattChar)
+{
+  KeyValuePair* storedPair = storage.get(name);
+
+  if (storedPair == NULL)
+  {
+    // nothing stored yet the default values will be used
+  } else {
+    memcpy(&value, storedPair->value, sizeof(value));
+    ble.gattServer().write(gattChar.getValueHandle(),
+      storedPair->value, sizeof(value));
+    display.scroll((int)value);
+  }
+}
+
+// must be called after ble is mostly initialized
+void initAdcCalibration()
+{
+  loadStoredValue("adcCal50", adcCalibrationHalfCounts,
+    adcCalibrationHalfCountsChar);
+
+  loadStoredValue("adcCal75", adcCalibrationThreeQuartersCounts,
+    adcCalibrationThreeQuartersCountsChar);
 }
 
 void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
@@ -91,6 +182,9 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
 
     // register a callback so we start advertising again on disconnect
     ble.gap().onDisconnection(disconnectionCallback);
+
+    // register connection callback so we can update the display
+    ble.gap().onConnection(connectionCallback);
 
     /**
      * In our advertising payload we just want to include the name since that is all
@@ -118,15 +212,37 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
      // a scan response.
      ble.gap().setAdvertisingType(GapAdvertisingParams::ADV_CONNECTABLE_UNDIRECTED);
      // TODO: check the apple guidelines, I believe they recommend a different advertising
-     // interval configuration
-     ble.gap().setAdvertisingInterval(500); /* 500ms */
+     // interval configuration: https://developer.apple.com/hardwaredrivers/BluetoothDesignGuidelines.pdf
+     ble.gap().setAdvertisingInterval(152); /* 100ms */
+
+     // It seems the default connection interval that is used is very slow
+     // if I understand it right. The Peripheral supplies its preferences and the central
+     // device decides what to do. So I think the default preferences from the MicroBit
+     // are very slow.  These are set by this struct: ConnectionParams_t
+     // and these methods can be used to set them: getPreferredConnectionParams
+     // setPreferredConnectionParams
+     // From the micro bit dal source
+     // Configure for high speed mode where possible.
+     Gap::ConnectionParams_t fast;
+     ble.gap().getPreferredConnectionParams(&fast);
+     fast.minConnectionInterval = 8;  // 10 ms
+     fast.maxConnectionInterval = 16; // 20 ms
+     fast.slaveLatency = 0;
+     ble.gap().setPreferredConnectionParams(&fast);
+
+     ble.gattServer().onDataWritten(&onDataWritten);
+
 
      // Add the 2 temperature sensor services
+     ble.addService(deviceInfoService);
      ble.addService(tempAService);
      ble.addService(tempBService);
 
+     initAdcCalibration();
+
      ble.gap().startAdvertising();
 }
+
 
 void my_wait(uint32_t millis)
 {
@@ -146,16 +262,27 @@ void onButtonA(MicroBitEvent e)
   // my_wait(1000);
   // wait_ms(1000);
 
-  if (e.value == MICROBIT_BUTTON_EVT_DOWN)
+  if (e.value == MICROBIT_BUTTON_EVT_DOWN) {
+    startingToSleep = true;
+
+    // P2 is used to power the voltage divider
+    // power it down as we prepare for sleep
+    P2.setDigitalValue(0);
+
     display.clear();
+  }
 
   if (e.value == MICROBIT_BUTTON_EVT_UP) {
     // Try to configure button A to wake from power off.
     nrf_gpio_cfg_sense_input(MICROBIT_PIN_BUTTON_A, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
 
     // need to clear the pull up resistor on the pins so we don't loose current there
-    P0.getDigitalValue();
-    P0.setPull(PullNone);
+    // P0.getDigitalValue();
+    // P0.setPull(PullNone);
+    // P1.getDigitalValue();
+    // P1.setPull(PullNone);
+
+    // is it possible that the A2D converter gets left on here?
 
     sd_power_system_off();
   }
@@ -163,20 +290,23 @@ void onButtonA(MicroBitEvent e)
 
 // how many samples to take and average, more takes longer
 // but is more 'smooth'
-// bluefruit thermoscope used 80 here
-#define NUMSAMPLES 10
+// bluefruit thermoscope used 80 here the micro bit with the pullup approach was
+// very smooth with just 10, so I might be able to go lower
+#define NUMSAMPLES 1
 int samples[NUMSAMPLES];
 
 // temp. for nominal resistance (almost always 25 C)
 #define TEMPERATURENOMINAL 25
 
-void readTemperature(){
+void _readTemperature(MicroBitPin& pin, GattAttribute::Handle_t gattTempHandle,
+    GattAttribute::Handle_t gattCountsHandle,
+    float seriesResistance, float thermistorNominalResistance, float thermistorBeta){
   uint8_t i;
   float averageDigitialCounts;
 
   // take N samples in a row
   for (i=0; i< NUMSAMPLES; i++) {
-   samples[i] = P0.getAnalogValue();
+   samples[i] = pin.getAnalogValue();
   }
 
   // average all the samples out
@@ -194,21 +324,21 @@ void readTemperature(){
   // Serial.print("Average analog reading ");
   // Serial.println(average);
 
-  // convert the value to resistance
-  // Solving the voltage divider equation: Vout = Vin * R2 / (R1 + R2)
-  // For R2 yields: R2 = R1 / ((Vin / Vout) - 1)
+  // ratio = Vin/Vout
+  // Need to calibrate this ratio using the stored calibration points
+  float ratioSlope = 0.25 / (adcCalibrationThreeQuartersCounts - adcCalibrationHalfCounts);
+  float ratioOffset = 0.5 - ratioSlope * adcCalibrationHalfCounts;
+  float ratio = averageDigitialCounts * ratioSlope + ratioOffset;
 
-
-  // if we are using the resitor from adafruit
-  // float seriesResistance = 10000;
-
-  // If we are using the pull up resistor
-  float seriesResistance = 13000;
-  float thermistorNominalResistance = 10000;
-  float thermistorBeta = 3950;
-
-  float resistanceRatio = (1024 / averageDigitialCounts) - 1;
-  float resistance = seriesResistance  / resistanceRatio;
+  // convert the ratio to resistance
+  // Solving the voltage divider equation:
+  //   Vout = Vin * R2 / (R1 + R2)
+  // For R2 yields:
+  //   R2 = Vout * R1/ (Vin - Vout)
+  // Then writing that in terms of a the ratio
+  //   ratio = Vin/Vout
+  //   R2 = ratio*R1/(1 - ratio)
+  float resistance = seriesResistance * ratio / (1 - ratio);
 
   // Serial.print("Thermistor resistance ");
   // Serial.println(average);
@@ -222,34 +352,58 @@ void readTemperature(){
   steinhart -= 273.15;                         // convert to C
 
   int32_t temperature_100 = (int32_t)(steinhart * 100);
+  int32_t averageDigitalCounts_100 = (int32_t)(averageDigitialCounts * 100);
 
   if (ble.getGapState().connected) {
-      ble.gattServer().write(tempAChar.getValueHandle(), (uint8_t *) &temperature_100, sizeof(temperature_100));
+      ble.gattServer().write(gattTempHandle, (uint8_t *) &temperature_100, sizeof(temperature_100));
+      ble.gattServer().write(gattCountsHandle, (uint8_t *) &averageDigitalCounts_100, sizeof(averageDigitalCounts_100));
   }
 
   // convert to an int by multipling by 10 this gives us 1 decimal place of resolution
   // display.scroll((int)(steinhart * 10));
 
   // reset the display after scrolling, so we can tell it is still on
-  // display.print("r");
+  // display.print("A");
   // gatt.setChar(sensorService->measureCharId, (int32_t)(steinhart * 100));
 
 }
 
-void onButtonB(MicroBitEvent e)
-{
-  readTemperature();
+void readTemperaturePullUp(MicroBitPin& pin, GattAttribute::Handle_t gattTempHandle,
+    GattAttribute::Handle_t gattCountsHandle){
+  // If we are using the pull up resistor
+  float seriesResistance = 13000;
+  float thermistorNominalResistance = 10000;
+  float thermistorBeta = 3950;
+  _readTemperature(pin, gattTempHandle, gattCountsHandle, seriesResistance, thermistorNominalResistance, thermistorBeta);
 }
 
-void my_panic(){
-  display.print("e");
-  while(true){
-      wait_ms(10);
-  }
+void readTemperature100k(MicroBitPin& pin, GattAttribute::Handle_t gattTempHandle,
+    GattAttribute::Handle_t gattCountsHandle){
+  // There is a 10MOhm pull up resistor on P0, P1, and P2
+  float seriesResistance = 99010;
+  float thermistorNominalResistance = 100000;
+  // The reported Beta from the datasheet was 4261, but adjusting that for the
+  // range of temperatures (0 - 25) that these will be used for 4090 is
+  // a better value.  That was computed via
+  // http://www.thinksrs.com/downloads/programs/Therm%20Calc/NTCCalibrator/NTCcalculator.htm
+  float thermistorBeta = 4090;
+
+  _readTemperature(pin, gattTempHandle, gattCountsHandle, seriesResistance, thermistorNominalResistance, thermistorBeta);
+}
+
+#define READ_TEMP readTemperature100k
+
+void onButtonB(MicroBitEvent e)
+{
+  READ_TEMP(P0, tempAChar.getValueHandle(), countsAChar.getValueHandle());
+  READ_TEMP(P1, tempBChar.getValueHandle(), countsBChar.getValueHandle());
 }
 
 int main(void)
 {
+    // reset this incase globals are preserved during deepSleep
+    startingToSleep = false;
+
     ble.init(bleInitComplete);
 
     /* SpinWait for initialization to complete. This is necessary because the
@@ -270,10 +424,22 @@ int main(void)
     // enable the pull up on on pin0
     // Need to switch into digital mode before setting the pull up
     // geting a digital value seems like the only way to do this
-    P0.getDigitalValue();
-    if(P0.setPull(PullUp) != MICROBIT_OK){
-      my_panic();
-    };
+    // if (READ_TEMP == readTemperaturePullUp){
+    //   P0.getDigitalValue();
+    //   if(P0.setPull(PullUp) != MICROBIT_OK){
+    //     my_panic();
+    //   };
+    // } else {
+
+      // just to be sure
+      P0.getDigitalValue();
+      P0.setPull(PullNone);
+      P1.getDigitalValue();
+      P1.setPull(PullNone);
+
+      // P2 is used to power the voltage divider
+      P2.setDigitalValue(1);
+    // }
 
     // uBit.display.print("m");
 
@@ -289,7 +455,7 @@ int main(void)
       my_panic();
     }
 
-    display.print("r");
+    display.print("A");
 
     // this line causes a gain of 0.8mA looking at the code this seems like it must be
     // caused by making the pins be input pins and/or setting them to PullNone
@@ -298,8 +464,14 @@ int main(void)
     // sd_power_system_off();
 
     while(true){
-      // spin loop incase we are running in debug mode
-      my_wait(10000);
+      if (startingToSleep) {
+        my_wait(500);
+      } else {
+        READ_TEMP(P0, tempAChar.getValueHandle(), countsAChar.getValueHandle());
+        my_wait(500);
+        READ_TEMP(P1, tempBChar.getValueHandle(), countsBChar.getValueHandle());
+        my_wait(500);
+      }
     }
     // while (true) {
     //     ble.waitForEvent(); // allows or low power operation
