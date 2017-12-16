@@ -45,12 +45,35 @@ bool startingToSleep = false;
 // TODO figure out how to split this out into a header like the other services
 int16_t adcCalibrationHalfCounts = 512;
 int16_t adcCalibrationThreeQuartersCounts = 767;
+char iconChar[5]  = "m";
+// 1.0.0 was using the Bluefruit
+char version[] = "2.0.0";
 
+// TODO figure out if we need to send the NUL at the end of the string or not.
+// With the Bluefruit I just sent the string in. And it updated the char
+// so I don't know what length it used. Other examples of strings in the nordic ble
+// do not include the NUL. So lets try that here.
+GattCharacteristic
+  iconCharChar((uint16_t)0x2345, (uint8_t *)&iconChar, strlen(iconChar), 5,
+    GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_READ |
+    GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_WRITE |
+    GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_WRITE_WITHOUT_RESPONSE
+  );
+GattCharacteristic
+  versionChar((uint16_t)0x6789, (uint8_t *)&version, strlen(version), 10,
+    GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_READ
+  );
 ReadWriteGattCharacteristic<int16_t>
-  adcCalibrationHalfCountsChar((uint16_t)0x0101, &adcCalibrationHalfCounts);
+  adcCalibrationHalfCountsChar((uint16_t)0x0101, &adcCalibrationHalfCounts,
+    GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_WRITE_WITHOUT_RESPONSE);
 ReadWriteGattCharacteristic<int16_t>
-  adcCalibrationThreeQuartersCountsChar((uint16_t)0x0102, &adcCalibrationThreeQuartersCounts);
-GattCharacteristic *deviceChars[] = {&adcCalibrationHalfCountsChar, &adcCalibrationThreeQuartersCountsChar, };
+  adcCalibrationThreeQuartersCountsChar((uint16_t)0x0102, &adcCalibrationThreeQuartersCounts,
+    GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_WRITE_WITHOUT_RESPONSE);
+GattCharacteristic *deviceChars[] = {
+  &iconCharChar,
+  &versionChar,
+  &adcCalibrationHalfCountsChar,
+  &adcCalibrationThreeQuartersCountsChar, };
 GattService         deviceInfoService((uint16_t)0x1234, deviceChars, sizeof(deviceChars) / sizeof(GattCharacteristic *));
 
 const uint8_t  TempAServiceUUID[] = {
@@ -120,6 +143,10 @@ void updateStorage()
      sizeof(adcCalibrationThreeQuartersCounts)) != MICROBIT_OK){
     my_panic();
   }
+  if(storage.put("iconChar", (uint8_t *)iconChar,
+     sizeof(iconChar)) != MICROBIT_OK){
+    my_panic();
+  }
   display.print("U");
 }
 
@@ -134,6 +161,16 @@ void onDataWritten(const GattWriteCallbackParams* writeParams)
   } else if(handle == adcCalibrationThreeQuartersCountsChar.getValueHandle()) {
     memcpy(&adcCalibrationThreeQuartersCounts, writeParams->data, sizeof(adcCalibrationThreeQuartersCounts));
     display.print("T");
+    create_fiber(updateStorage);
+  } else if(handle == iconCharChar.getValueHandle()) {
+    uint32_t len = writeParams->len;
+    if(len > (sizeof(iconChar)-1)) {
+      len = sizeof(iconChar) - 1;
+    }
+    // fill the iconChar with zeros so that regardless of the length
+    // there will be at least one zero at the end
+    memset(iconChar, 0, sizeof(iconChar));
+    memcpy(iconChar, writeParams->data, len);
     create_fiber(updateStorage);
   }
 }
@@ -154,14 +191,32 @@ void loadStoredValue(const char *name, int16_t& value, GattCharacteristic& gattC
   }
 }
 
+// read the values fron storage and also set them on the gatt characteristics
+void loadStoredValue(const char *name, char *value, uint16_t len, GattCharacteristic& gattChar)
+{
+  KeyValuePair* storedPair = storage.get(name);
+
+  if (storedPair == NULL)
+  {
+    // nothing stored yet the default values will be used
+  } else {
+    memcpy(value, storedPair->value, len);
+    ble.gattServer().write(gattChar.getValueHandle(),
+      storedPair->value, strlen((char *)(storedPair->value)));
+    display.scroll(value);
+  }
+}
+
 // must be called after ble is mostly initialized
-void initAdcCalibration()
+void initStoredConfig()
 {
   loadStoredValue("adcCal50", adcCalibrationHalfCounts,
     adcCalibrationHalfCountsChar);
 
   loadStoredValue("adcCal75", adcCalibrationThreeQuartersCounts,
     adcCalibrationThreeQuartersCountsChar);
+
+  loadStoredValue("iconChar", iconChar, sizeof(iconChar), iconCharChar);
 }
 
 void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
@@ -238,7 +293,7 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
      ble.addService(tempAService);
      ble.addService(tempBService);
 
-     initAdcCalibration();
+     initStoredConfig();
 
      ble.gap().startAdvertising();
 }
