@@ -34,6 +34,7 @@
 BLE ble;
 
 // Temporary static name
+const static char     DEVICE_NAME_PREFIX[]        = "Thermoscope ";
 const static char     DEVICE_NAME[]        = "Thermoscope M";
 
 int32_t initialTemp = 1000;
@@ -229,6 +230,8 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
         return;
     }
 
+    initStoredConfig();
+
     // I'm not sure what this check is for. Is is used in the ble examples from
     // nordic
     if (ble.getInstanceID() != BLE::DEFAULT_INSTANCE) {
@@ -251,6 +254,16 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
      /* setup advertising this comes from the health thermometer example */
      // add the flags
      ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::BREDR_NOT_SUPPORTED | GapAdvertisingData::LE_GENERAL_DISCOVERABLE);
+
+     // figure out the device name
+     char deviceName[sizeof(DEVICE_NAME_PREFIX) + 4];
+
+     // Need to figure out how to initialize this.
+     strcpy(deviceName, DEVICE_NAME_PREFIX);
+
+     //  = DEVICE_NAME_PREFIX;
+     strncat(deviceName, iconChar, 4);
+
      // TODO add a UUID this is the standard way to filter devices. This would be safer
      // than filtering by just the Thermoscope name prefix
      // but we don't have a lot of space, this would take up
@@ -261,7 +274,9 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
      // ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::COMPLETE_LIST_16BIT_SERVICE_IDS, (uint8_t *)uuid16_list, sizeof(uuid16_list));
      // I don't know what kind of additional packet this is, perhaps a known id for this type of device
      //  ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::THERMOMETER_EAR);
-     ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::COMPLETE_LOCAL_NAME, (uint8_t *)DEVICE_NAME, sizeof(DEVICE_NAME));
+
+     // The size should include the NUL at the end or not
+     ble.gap().accumulateAdvertisingPayload(GapAdvertisingData::COMPLETE_LOCAL_NAME, (uint8_t *)deviceName, strlen(deviceName) + 1);
      // If I understand things correctly, this means that any other device can connect to
      // to us. This is also the place where it would be changed if we wanted to support
      // a scan response.
@@ -292,8 +307,6 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
      ble.addService(deviceInfoService);
      ble.addService(tempAService);
      ble.addService(tempBService);
-
-     initStoredConfig();
 
      ble.gap().startAdvertising();
 }
