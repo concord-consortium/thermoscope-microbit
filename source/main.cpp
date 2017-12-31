@@ -202,6 +202,14 @@ void loadStoredValue(const char *name, char *value, uint16_t len, GattCharacteri
     // nothing stored yet the default values will be used
   } else {
     memcpy(value, storedPair->value, len);
+
+    // Because this is a variable length characteristic, the length needs to be updated
+    // when the value is updated. Otherwise the length remains the same as when the
+    // the char was initialized
+    uint16_t *len = gattChar.getValueAttribute().getLengthPtr();
+    *len = strlen((char *)(storedPair->value));
+
+    // Then write the value
     ble.gattServer().write(gattChar.getValueHandle(),
       storedPair->value, strlen((char *)(storedPair->value)));
     display.scroll(value);
@@ -218,6 +226,7 @@ void initStoredConfig()
     adcCalibrationThreeQuartersCountsChar);
 
   loadStoredValue("iconChar", iconChar, sizeof(iconChar), iconCharChar);
+
 }
 
 void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
@@ -283,7 +292,9 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
      ble.gap().setAdvertisingType(GapAdvertisingParams::ADV_CONNECTABLE_UNDIRECTED);
      // TODO: check the apple guidelines, I believe they recommend a different advertising
      // interval configuration: https://developer.apple.com/hardwaredrivers/BluetoothDesignGuidelines.pdf
-     ble.gap().setAdvertisingInterval(152); /* 100ms */
+     // the lowest recommended adv interval from apple, is 152ms. However they say it is
+     // fine to advertise faster for the first 30 seconds when it is turned on
+     ble.gap().setAdvertisingInterval(20); /* 100ms */
 
      // It seems the default connection interval that is used is very slow
      // if I understand it right. The Peripheral supplies its preferences and the central
