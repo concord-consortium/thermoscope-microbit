@@ -28,6 +28,7 @@
 #include "MicroBitButton.h"
 #include "MicroBitPin.h"
 #include "MicroBitStorage.h"
+#include "MicroBitSystemTimer.h"
 
 // #include "MicroBit.h"
 
@@ -41,6 +42,10 @@ int32_t initialTemp = 1000;
 int32_t initialCounts = 0;
 
 bool startingToSleep = false;
+bool sleeping = false;
+uint64_t advertisingStartTime = 0;
+
+#define ADVERTISING_TIMEOUT_MS 90000
 
 // Static configuration of services
 // TODO figure out how to split this out into a header like the other services
@@ -120,11 +125,17 @@ void my_panic(){
   }
 }
 
+void startAdvertising()
+{
+  advertisingStartTime = system_timer_current_time();
+  display.print("A");
+  BLE::Instance().gap().startAdvertising();
+}
+
 /* Restart Advertising on disconnection*/
 void disconnectionCallback(const Gap::DisconnectionCallbackParams_t *)
 {
-    display.print("A");
-    BLE::Instance().gap().startAdvertising();
+  startAdvertising();
 }
 
 void connectionCallback(const Gap::ConnectionCallbackParams_t *)
@@ -188,7 +199,7 @@ void loadStoredValue(const char *name, int16_t& value, GattCharacteristic& gattC
     memcpy(&value, storedPair->value, sizeof(value));
     ble.gattServer().write(gattChar.getValueHandle(),
       storedPair->value, sizeof(value));
-    display.scroll((int)value);
+    // display.scroll((int)value);
   }
 }
 
@@ -212,7 +223,7 @@ void loadStoredValue(const char *name, char *value, uint16_t len, GattCharacteri
     // Then write the value
     ble.gattServer().write(gattChar.getValueHandle(),
       storedPair->value, strlen((char *)(storedPair->value)));
-    display.scroll(value);
+    // display.scroll(value);
   }
 }
 
@@ -319,7 +330,7 @@ void bleInitComplete(BLE::InitializationCompleteCallbackContext *params)
      ble.addService(tempAService);
      ble.addService(tempBService);
 
-     ble.gap().startAdvertising();
+     startAdvertising();
 }
 
 
@@ -330,40 +341,64 @@ void my_wait(uint32_t millis)
     fiber_sleep(millis);
 }
 
+void startSleep(){
+  startingToSleep = true;
+
+  // P2 is used to power the voltage divider
+  // power it down as we prepare for sleep
+  P2.setDigitalValue(0);
+
+  display.clear();
+}
+
+// sleeping is divided into two parts this is the second part
+// TODO test out if this finishSleep needs to be done in the main loop
+// it would be cleaner if this could be done using a delayed fiber method
+void finishSleep(){
+  sleeping = true;
+
+  // Try to configure button A to wake from power off.
+  nrf_gpio_cfg_sense_input(MICROBIT_PIN_BUTTON_A, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+
+  // need to clear the pull up resistor on the pins so we don't loose current there
+  // P0.getDigitalValue();
+  // P0.setPull(PullNone);
+  // P1.getDigitalValue();
+  // P1.setPull(PullNone);
+
+  // is it possible that the A2D converter gets left on here?
+
+  sd_power_system_off();
+}
+
 void onButtonA(MicroBitEvent e)
 {
-  // uBit.display.printAsync("A");
-  // wait_ms(1000);
-  // my_wait(1000);
-  // my_wait(1000);
-  // uBit.display.clear();
-  //
-  // my_wait(1000);
-  // wait_ms(1000);
 
   if (e.value == MICROBIT_BUTTON_EVT_DOWN) {
-    startingToSleep = true;
-
-    // P2 is used to power the voltage divider
-    // power it down as we prepare for sleep
-    P2.setDigitalValue(0);
-
-    display.clear();
+    // startingToSleep = true;
+    //
+    // // P2 is used to power the voltage divider
+    // // power it down as we prepare for sleep
+    // P2.setDigitalValue(0);
+    //
+    // display.clear();
   }
 
   if (e.value == MICROBIT_BUTTON_EVT_UP) {
-    // Try to configure button A to wake from power off.
-    nrf_gpio_cfg_sense_input(MICROBIT_PIN_BUTTON_A, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+    startSleep();
 
-    // need to clear the pull up resistor on the pins so we don't loose current there
-    // P0.getDigitalValue();
-    // P0.setPull(PullNone);
-    // P1.getDigitalValue();
-    // P1.setPull(PullNone);
-
-    // is it possible that the A2D converter gets left on here?
-
-    sd_power_system_off();
+    // // Try to configure button A to wake from power off.
+    // nrf_gpio_cfg_sense_input(MICROBIT_PIN_BUTTON_A, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+    //
+    // // need to clear the pull up resistor on the pins so we don't loose current there
+    // // P0.getDigitalValue();
+    // // P0.setPull(PullNone);
+    // // P1.getDigitalValue();
+    // // P1.setPull(PullNone);
+    //
+    // // is it possible that the A2D converter gets left on here?
+    //
+    // sd_power_system_off();
   }
 }
 
@@ -483,6 +518,9 @@ int main(void)
     // reset this incase globals are preserved during deepSleep
     startingToSleep = false;
 
+    // Indicate that we are initializing
+    display.print("I");
+
     ble.init(bleInitComplete);
 
     /* SpinWait for initialization to complete. This is necessary because the
@@ -534,8 +572,6 @@ int main(void)
       my_panic();
     }
 
-    display.print("A");
-
     // this line causes a gain of 0.8mA looking at the code this seems like it must be
     // caused by making the pins be input pins and/or setting them to PullNone
     // display.disable();
@@ -544,12 +580,26 @@ int main(void)
 
     while(true){
       if (startingToSleep) {
+        startingToSleep = false;
         my_wait(500);
+        finishSleep();
+      } else if (sleeping) {
+        my_wait(500);
+      } else if (ble.getGapState().connected){
+          READ_TEMP(P0, tempAChar.getValueHandle(), countsAChar.getValueHandle());
+          my_wait(500);
+          READ_TEMP(P1, tempBChar.getValueHandle(), countsBChar.getValueHandle());
+          my_wait(500);
+      } else if (ble.getGapState().advertising){
+        uint64_t advertisingTime = system_timer_current_time() - advertisingStartTime;
+        if(advertisingTime > ADVERTISING_TIMEOUT_MS){
+          startSleep();
+        } else {
+          display.print((int)((ADVERTISING_TIMEOUT_MS - advertisingTime) / 10000));
+          my_wait(100);          
+        }
       } else {
-        READ_TEMP(P0, tempAChar.getValueHandle(), countsAChar.getValueHandle());
-        my_wait(500);
-        READ_TEMP(P1, tempBChar.getValueHandle(), countsBChar.getValueHandle());
-        my_wait(500);
+        my_wait(100);
       }
     }
     // while (true) {
