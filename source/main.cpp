@@ -28,13 +28,13 @@ char version[] = "2.0.0";
 
 
 const uint8_t advertising_img_arr[] {
-                          1, 1, 1, 1, 1,
-                          0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, };
+                          1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
-MicroBitImage advertising_img(5,5,advertising_img_arr);
+MicroBitImage advertising_img(10,5,advertising_img_arr);
 
 // TODO figure out if we need to send the NUL at the end of the string or not.
 // With the Bluefruit I just sent the string in. And it updated the char
@@ -569,6 +569,10 @@ int main(void)
         if(advertisingTime > ADVERTISING_TIMEOUT_MS){
           startSleep();
         } else {
+          uint64_t remainingAdvertisingTime = ADVERTISING_TIMEOUT_MS - advertisingTime;
+          int pixels_to_show = ((remainingAdvertisingTime * 5)/ ADVERTISING_TIMEOUT_MS) + 1;
+          // display.print(pixels_to_show);
+          display.print(advertising_img, pixels_to_show - 5, 0);
           // display.print((int)((ADVERTISING_TIMEOUT_MS - advertisingTime) / 10000));
           my_wait(100);
         }
