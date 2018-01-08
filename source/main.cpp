@@ -1,34 +1,5 @@
-#include "mbed.h"
-#include "ble/services/iBeacon.h"
-/*
- * The underlying Nordic libraries that support BLE do not compile cleanly with the stringent GCC settings we employ
- * If we're compiling under GCC, then we suppress any warnings generated from this code (but not the rest of the DAL)
- * The ARM cc compiler is more tolerant. We don't test __GNUC__ here to detect GCC as ARMCC also typically sets this
- * as a compatability option, but does not support the options used...
- */
-#if !defined(__arm)
-#pragma GCC diagnostic ignored "-Wunused-function"
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#endif
-#include "nrf_soc.h"
-#include "nrf_gpio.h"
-
-/*
- * Return to our predefined compiler settings.
- */
-#if !defined(__arm)
-#pragma GCC diagnostic pop
-#endif
-
-
-#include "MicroBitDisplay.h"
-#include "MicroBitFiber.h"
-#include "MicroBitMessageBus.h"
-#include "MicroBitButton.h"
-#include "MicroBitPin.h"
-#include "MicroBitStorage.h"
-#include "MicroBitSystemTimer.h"
+#include "thermoscope.h"
+#include "spiral-animation.h"
 
 // #include "MicroBit.h"
 
@@ -54,6 +25,16 @@ int16_t adcCalibrationThreeQuartersCounts = 767;
 char iconChar[5]  = "m";
 // 1.0.0 was using the Bluefruit
 char version[] = "2.0.0";
+
+
+const uint8_t advertising_img_arr[] {
+                          1, 1, 1, 1, 1,
+                          0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, };
+
+MicroBitImage advertising_img(5,5,advertising_img_arr);
 
 // TODO figure out if we need to send the NUL at the end of the string or not.
 // With the Bluefruit I just sent the string in. And it updated the char
@@ -128,7 +109,7 @@ void my_panic(){
 void startAdvertising()
 {
   advertisingStartTime = system_timer_current_time();
-  display.print("A");
+  display.print(advertising_img);
   BLE::Instance().gap().startAdvertising();
 }
 
@@ -140,7 +121,7 @@ void disconnectionCallback(const Gap::DisconnectionCallbackParams_t *)
 
 void connectionCallback(const Gap::ConnectionCallbackParams_t *)
 {
-    display.print("C");
+  create_fiber(displayAnimation);
 }
 
 void updateStorage()
@@ -507,12 +488,6 @@ void readTemperature100k(MicroBitPin& pin, GattAttribute::Handle_t gattTempHandl
 
 #define READ_TEMP readTemperature100k
 
-void onButtonB(MicroBitEvent e)
-{
-  READ_TEMP(P0, tempAChar.getValueHandle(), countsAChar.getValueHandle());
-  READ_TEMP(P1, tempBChar.getValueHandle(), countsBChar.getValueHandle());
-}
-
 int main(void)
 {
     // reset this incase globals are preserved during deepSleep
@@ -568,10 +543,6 @@ int main(void)
       my_panic();
     }
 
-    if(messageBus.listen(MICROBIT_ID_BUTTON_B, MICROBIT_BUTTON_EVT_DOWN, onButtonB) != MICROBIT_OK){
-      my_panic();
-    }
-
     // this line causes a gain of 0.8mA looking at the code this seems like it must be
     // caused by making the pins be input pins and/or setting them to PullNone
     // display.disable();
@@ -588,15 +559,18 @@ int main(void)
       } else if (ble.getGapState().connected){
           READ_TEMP(P0, tempAChar.getValueHandle(), countsAChar.getValueHandle());
           my_wait(500);
-          READ_TEMP(P1, tempBChar.getValueHandle(), countsBChar.getValueHandle());
-          my_wait(500);
+          // the connected state might have changed after this wait
+          if (ble.getGapState().connected){
+            READ_TEMP(P1, tempBChar.getValueHandle(), countsBChar.getValueHandle());
+            my_wait(500);
+          }
       } else if (ble.getGapState().advertising){
         uint64_t advertisingTime = system_timer_current_time() - advertisingStartTime;
         if(advertisingTime > ADVERTISING_TIMEOUT_MS){
           startSleep();
         } else {
-          display.print((int)((ADVERTISING_TIMEOUT_MS - advertisingTime) / 10000));
-          my_wait(100);          
+          // display.print((int)((ADVERTISING_TIMEOUT_MS - advertisingTime) / 10000));
+          my_wait(100);
         }
       } else {
         my_wait(100);
