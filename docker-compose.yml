@@ -4,5 +4,4 @@ services:
     build:
       context: .
     volumes:
-      # currently the build folders are ignored in dockerignore
       - .:/microbit
