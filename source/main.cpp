@@ -24,7 +24,8 @@ int16_t adcCalibrationHalfCounts = 512;
 int16_t adcCalibrationThreeQuartersCounts = 767;
 char iconChar[5]  = "m";
 // 1.0.0 was using the Bluefruit
-char version[] = "2.0.0";
+// 2.0.0 used 100kOhm thermistor and external pullup
+char version[] = "3.0.0";
 
 
 const uint8_t advertising_img_arr[] {
@@ -338,14 +339,16 @@ void startSleep(){
 void finishSleep(){
   sleeping = true;
 
-  // Try to configure button A to wake from power off.
+  // configure button A to wake from power off.
   nrf_gpio_cfg_sense_input(MICROBIT_PIN_BUTTON_A, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
 
-  // need to clear the pull up resistor on the pins so we don't loose current there
-  // P0.getDigitalValue();
-  // P0.setPull(PullNone);
-  // P1.getDigitalValue();
-  // P1.setPull(PullNone);
+  #if READ_TEMP == readTemperaturePullUp
+    // need to clear the pull up resistor on the pins so we don't loose current there
+    P0.getDigitalValue();
+    P0.setPull(PullNone);
+    P1.getDigitalValue();
+    P1.setPull(PullNone);
+  #endif
 
   // is it possible that the A2D converter gets left on here?
 
@@ -486,7 +489,7 @@ void readTemperature100k(MicroBitPin& pin, GattAttribute::Handle_t gattTempHandl
   _readTemperature(pin, gattTempHandle, gattCountsHandle, seriesResistance, thermistorNominalResistance, thermistorBeta);
 }
 
-#define READ_TEMP readTemperature100k
+#define READ_TEMP readTemperaturePullUp
 
 int main(void)
 {
@@ -508,20 +511,29 @@ int main(void)
     scheduler_init(messageBus);
 
 
-    // Note: The pull up resitor can vary in resistance a lot from the spec
-    //  Symbol  |   Parameter              |   Min.  |    Typ.  |    Max.  |   Units
-    //  RPU     |   Pull-up resistance     |   11    |    13    |    16    |   kOhm
-    //  RPD     |   Pull-down resistance   |   11    |    13    |    16    |   kOhm
+    #if READ_TEMP == readTemperaturePullUp
+      // Note: The pull up resitor can vary in resistance a lot from the spec
+      //  Symbol  |   Parameter              |   Min.  |    Typ.  |    Max.  |   Units
+      //  RPU     |   Pull-up resistance     |   11    |    13    |    16    |   kOhm
+      //  RPD     |   Pull-down resistance   |   11    |    13    |    16    |   kOhm
 
-    // enable the pull up on on pin0
-    // Need to switch into digital mode before setting the pull up
-    // geting a digital value seems like the only way to do this
-    // if (READ_TEMP == readTemperaturePullUp){
-    //   P0.getDigitalValue();
-    //   if(P0.setPull(PullUp) != MICROBIT_OK){
-    //     my_panic();
-    //   };
-    // } else {
+      // enable the pull up on on pin0
+      // Need to switch into digital mode before setting the pull up
+      // geting a digital value seems like the only way to do this
+
+      // Also this will result in more power usage if the pull up resistor is left enable
+      // the whole time even when not collecting. A better approach would be to disable
+      // the pull up until we are connector. Or perhaps only enabling it during the actual
+      // collection.
+      P0.getDigitalValue();
+      if(P0.setPull(PullUp) != MICROBIT_OK){
+        my_panic();
+      };
+      P1.getDigitalValue();
+      if(P1.setPull(PullUp) != MICROBIT_OK){
+        my_panic();
+      };
+    #else
 
       // just to be sure
       P0.getDigitalValue();
@@ -531,7 +543,8 @@ int main(void)
 
       // P2 is used to power the voltage divider
       P2.setDigitalValue(1);
-    // }
+
+    #endif
 
     // uBit.display.print("m");
 
