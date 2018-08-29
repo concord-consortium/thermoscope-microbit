@@ -25,7 +25,9 @@ int16_t adcCalibrationThreeQuartersCounts = 767;
 char iconChar[5]  = "m";
 // 1.0.0 was using the Bluefruit
 // 2.0.0 used 100kOhm thermistor and external pullup
-char version[] = "3.0.0";
+// 3.0.0 uses internal 13kOhm pullup
+// 3.0.1 adds small adjustement to resistance calculation
+char version[] = "3.0.1";
 
 
 const uint8_t advertising_img_arr[] {
@@ -437,6 +439,11 @@ void _readTemperature(MicroBitPin& pin, GattAttribute::Handle_t gattTempHandle,
   //   ratio = Vin/Vout
   //   R2 = ratio*R1/(1 - ratio)
   float resistance = seriesResistance * ratio / (1 - ratio);
+
+  // add a small percentage "fudge factor," which testing has shown improves the accuracy of
+  // the resistance calculation slightly
+  // See https://docs.google.com/spreadsheets/d/1bisznElWn5MbZA_FZZ4lyXLnHPUDYRS4HXRlj1Li9I8/edit#gid=1212872858
+  resistance += (3E-6 * resistance - 0.05) * resistance;
 
   // Serial.print("Thermistor resistance ");
   // Serial.println(average);
